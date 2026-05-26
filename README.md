@@ -1,11 +1,82 @@
 # quadrotor-feedback-linearization-lpv-mpc
+
 6-DOF quadrotor simulation with a two-level cascade controller: feedback linearisation outer loop for position tracking and qLPV-MPC inner loop for attitude control. Built on full Newton-Euler dynamics, RK4 integration, aerodynamic drag, and gyroscopic rotor coupling. Validated on figure-8, yaw-sweep, and noise robustness scenarios.
 
 ---
 
-## Technical Deep Dive & Mathematical Formulation
+## What This Demonstrates
+
+- **Feedback Linearisation (Outer Loop)**: exact input-output linearisation, pole-placement gains, no small-angle assumption, runs at 5 Hz
+- **qLPV-MPC (Inner Loop)**: scheduling on Euler rates, ZOH discretisation, incremental (Δu) formulation with integral action, DARE terminal weight, runs at 20 Hz
+- **Full Newton-Euler Plant**: 12-state rigid-body model, RK4 integration, gyroscopic rotor coupling (J_tp · Ω_net), quadratic aerodynamic drag
+- **Constrained QP**: absolute torque limits + increment rate limits, solved via `quadprog` (active-set) with `scipy` L-BFGS-B fallback
+- **Trajectory Generator**: 7th-order minimum-jerk polynomial ramp, Lissajous figure-8, yaw-sweep variant
+- **Noise Robustness**: stress-tested at noise_std = 5e-2 (uniform per-state), zero rotor saturations maintained
 
 ---
+
+## Results
+
+### Nominal Figure-8 (drag on, no noise, 40 s)
+
+| Metric | Value |
+|--------|-------|
+| Position RMSE | 0.0075 m |
+| Position max error | 0.0307 m |
+| Attitude RMSE | 0.080 deg |
+| Attitude max error | 0.651 deg |
+| Control effort (mean torque norm) | 0.00055 N·m |
+| Rotor saturations | 0 / 801 steps (0.0%) |
+
+### Noise Robustness (noise_std = 5e-2, figure-8, 40 s)
+
+| Metric | Nominal | Stress (noise_std=5e-2) |
+|--------|---------|------------------------|
+| Position RMSE | 0.0075 m | 0.0097 m |
+| Position max | 0.0307 m | 0.0323 m |
+| Rotor saturations | 0 (0.0%) | 0 (0.0%) |
+
+---
+
+## Visualizations
+
+### Figure-8 (Nominal)
+![Figure-8 Nominal](src/figures/quad_results_figure8.png)
+
+### Yaw-Sweep Validation
+![Noise Robustness](src/figures/quad_results_noise.png)
+
+### Noise Robustness
+![Yaw Sweep](src/figures/quad_results_yaw.png)
+
+---
+
+## Controller Architecture
+
+```
+trajectory     ┌─────────────────────────────────────────┐
+reference  ──► │  OUTER LOOP  (5 Hz)                     │
+               │  PositionController                      │
+               │  Feedback linearisation + pole placement │
+               │  Output: phi_ref, theta_ref, U1          │
+               └──────────────────┬──────────────────────┘
+                                  │
+               ┌──────────────────▼──────────────────────┐
+               │  INNER LOOP  (20 Hz)                    │
+               │  LPVMPCController                        │
+               │  qLPV model · ZOH · Du form · DARE      │
+               │  Output: U2, U3, U4                      │
+               └──────────────────┬──────────────────────┘
+                                  │
+               ┌──────────────────▼──────────────────────┐
+               │  MIXER  (constant, precomputed)          │
+               │  [w1, w2, w3, w4] = M_inv · U           │
+               └─────────────────────────────────────────┘
+```
+
+---
+
+## Technical Deep Dive & Mathematical Formulation
 
 ### 1. Outer Loop — Feedback Linearisation (Position Control)
 
@@ -58,7 +129,7 @@ from roll/pitch and does not risk saturating the inner loop.
 
 #### Exact Angle Inversion (No Small-Angle Assumption)
 
-Unlike simplified models that assume `cos(phi), cos(theta) ≈ 1`, this
+Unlike simplified models that assume `cos(phi), cos(theta) = 1`, this
 implementation uses an exact geometric inversion. The required thrust
 magnitude and direction are:
 
@@ -120,18 +191,18 @@ y         = C * x_att
 #### A(sigma) Matrix — Non-Zero Entries
 
 ```
-A[0,1] = 1                                                (phi_dot  = d(phi)/dt)
+A[0,1] = 1                                                (phi_dot   = d(phi)/dt)
 A[2,3] = 1                                                (theta_dot = d(theta)/dt)
-A[4,5] = 1                                                (psi_dot  = d(psi)/dt)
+A[4,5] = 1                                                (psi_dot   = d(psi)/dt)
 
-A[1,3] = theta_dot*(Iy-Iz)/Ix - J_tp*Omega_net/Ix        (phi_ddot  <- theta_dot)
-A[1,5] = psi_dot*(Iy-Iz)/Ix                              (phi_ddot  <- psi_dot)
+A[1,3] = theta_dot*(Iy-Iz)/Ix - J_tp*Omega_net/Ix        (phi_ddot   <- theta_dot)
+A[1,5] = psi_dot*(Iy-Iz)/Ix                              (phi_ddot   <- psi_dot)
 
 A[3,1] = phi_dot*(Iz-Ix)/Iy + J_tp*Omega_net/Iy          (theta_ddot <- phi_dot)
 A[3,5] = psi_dot*(Iz-Ix)/Iy                              (theta_ddot <- psi_dot)
 
-A[5,1] = theta_dot*(Ix-Iy)/Iz                            (psi_ddot  <- phi_dot)
-A[5,3] = phi_dot*(Ix-Iy)/Iz                              (psi_ddot  <- theta_dot)
+A[5,1] = theta_dot*(Ix-Iy)/Iz                            (psi_ddot   <- phi_dot)
+A[5,3] = phi_dot*(Ix-Iy)/Iz                              (psi_ddot   <- theta_dot)
 ```
 
 #### B and C Matrices
@@ -157,8 +228,8 @@ Ad = expm(A(sigma) * dt)
 Bd = (integral from 0 to dt of expm(A(sigma)*tau) dtau) * B
 ```
 
-Forward Euler is not used. Euler discretisation can introduce artificial
-instability when continuous eigenvalues lie near the imaginary axis.
+Forward Euler is not used — it can introduce artificial instability when
+continuous eigenvalues lie near the imaginary axis.
 
 #### Incremental (Delta-u) Formulation
 
@@ -190,7 +261,7 @@ Predicting outputs over horizon N yields:
 ```
 Y = Psi * x_tilde(k) + Theta * Delta_U_bar
 
-Psi[i]    = C_tilde * A_tilde^(i+1)                          row block i in [0,N)
+Psi[i]     = C_tilde * A_tilde^(i+1)
 Theta[i,j] = C_tilde * A_tilde^(i-j) * B_tilde   for j <= i  (lower-triangular)
 ```
 
@@ -228,9 +299,10 @@ S = C_out * P * C_out^T,    C_out selects rows [phi, theta, psi]
 
 This anchors the terminal cost to the infinite-horizon LQR solution, providing
 a formal stability certificate for the receding-horizon loop
-(Rawlings & Mayne, Theorem 2.19).  The DARE solution is cached and only
-recomputed when the discrete matrices (Ad, Bd) change by more than a threshold,
-reducing DARE calls from 20 Hz to approximately 2-5 Hz during typical flight.
+(Rawlings & Mayne, Theorem 2.19). The DARE solution is cached and only
+recomputed when the discrete matrices `(Ad, Bd)` change by more than a
+threshold, reducing DARE calls from 20 Hz to approximately 2-5 Hz during
+typical flight.
 
 #### Constraints
 
@@ -258,72 +330,6 @@ U4_max  = 0.12 N·m     dU4_max = 0.05 N·m
 
 The QP is solved with `quadprog` (active-set, exact Hessian) when available,
 falling back to `scipy` L-BFGS-B otherwise.
-
----
-
-## What This Demonstrates
-- **Feedback Linearisation (Outer Loop)**: exact input-output linearisation, pole-placement gains, no small-angle assumption, runs at 5 Hz
-- **qLPV-MPC (Inner Loop)**: scheduling on Euler rates, ZOH discretisation, incremental (Δu) formulation with integral action, DARE terminal weight, runs at 20 Hz
-- **Full Newton-Euler Plant**: 12-state rigid-body model, RK4 integration, gyroscopic rotor coupling (J_tp · Ω_net), quadratic aerodynamic drag
-- **Constrained QP**: absolute torque limits + increment rate limits, solved via `quadprog` (active-set) with `scipy` L-BFGS-B fallback
-- **Trajectory Generator**: 7th-order minimum-jerk polynomial ramp, Lissajous figure-8, yaw-sweep variant
-- **Noise Robustness**: stress-tested at noise_std = 5e-2 (uniform per-state), zero rotor saturations maintained
-
----
-
-## Results
-
-### Nominal Figure-8 (drag on, no noise, 40 s)
-
-| Metric | Value |
-|--------|-------|
-| Position RMSE | 0.0075 m |
-| Position max error | 0.0307 m |
-| Attitude RMSE | 0.080 deg |
-| Attitude max error | 0.651 deg |
-| Control effort (mean torque norm) | 0.00055 N·m |
-| Rotor saturations | 0 / 801 steps (0.0%) |
-
-### Noise Robustness (noise_std = 5e-2, figure-8, 40 s)
-
-| Metric | Nominal | Stress (noise_std=5e-2) |
-|--------|---------|------------------------|
-| Position RMSE | 0.0075 m | 0.0097 m |
-| Position max | 0.0307 m | 0.0323 m |
-| Rotor saturations | 0 (0.0%) | 0 (0.0%) |
-
----
-
-## Visualizations
-
-![Figure-8 Nominal](src/figures/quad_results_figure8.png)
-![Yaw Sweep](src/figures/quad_results_yaw.png)
-![Noise Robustness](src/figures/quad_results_noise.png)
-
----
-
-## Controller Architecture
-
-```
-trajectory     ┌─────────────────────────────────────────┐
-reference  ──► │  OUTER LOOP  (5 Hz)                     │
-               │  PositionController                      │
-               │  Feedback linearisation + pole placement │
-               │  Output: φ_ref, θ_ref, U1               │
-               └──────────────────┬──────────────────────┘
-                                  │
-               ┌──────────────────▼──────────────────────┐
-               │  INNER LOOP  (20 Hz)                    │
-               │  LPVMPCController                        │
-               │  qLPV model · ZOH · Δu form · DARE      │
-               │  Output: U2, U3, U4                      │
-               └──────────────────┬──────────────────────┘
-                                  │
-               ┌──────────────────▼──────────────────────┐
-               │  MIXER  (constant, precomputed)          │
-               │  [ω1,ω2,ω3,ω4] = M⁻¹ · U               │
-               └─────────────────────────────────────────┘
-```
 
 ---
 
@@ -356,7 +362,9 @@ python simulate.py --no-plot        # skip matplotlib output
 pip install numpy scipy matplotlib quadprog
 ```
 
-`quadprog` is optional but recommended — without it the solver falls back to `scipy` L-BFGS-B, which is slower and encodes absolute input constraints as a conservative box approximation rather than exact linear constraints.
+`quadprog` is optional but recommended — without it the solver falls back to
+`scipy` L-BFGS-B, which is slower and encodes absolute input constraints as a
+conservative box approximation rather than exact linear constraints.
 
 ---
 
