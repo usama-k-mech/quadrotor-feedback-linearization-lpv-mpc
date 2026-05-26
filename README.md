@@ -38,9 +38,9 @@
 
 ## Visualizations
 
-![Figure-8 Nominal](figures/quad_results_figure8.png)
-![Yaw Sweep](figures/quad_results_yaw.png)
-![Noise Robustness](figures/quad_results_noise.png)
+![Figure-8 Nominal](src/figures/quad_results_figure8.png)
+![Yaw Sweep](src/figures/quad_results_yaw.png)
+![Noise Robustness](src/figures/quad_results_noise.png)
 
 ---
 
