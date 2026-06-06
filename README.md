@@ -43,10 +43,10 @@
 ### Figure-8 (Nominal)
 ![Figure-8 Nominal](src/figures/quad_results_figure8.png)
 
-### Yaw-Sweep Validation
+### Noise Robustness
 ![Noise Robustness](src/figures/quad_results_noise.png)
 
-### Noise Robustness
+### Yaw-Sweep Validation
 ![Yaw Sweep](src/figures/quad_results_yaw.png)
 
 ---
@@ -163,7 +163,7 @@ No switching logic needed for `cos(psi) = 0` or `sin(psi) = 0`.
 Rather than solving a slow non-convex Nonlinear MPC problem, the attitude
 nonlinearities are embedded into a quasi-Linear Parameter-Varying (qLPV)
 representation. The model matrices are updated online using measurable
-scheduling variables, keeping the optimisation problem convex (QP) at every
+scheduling variables, keeping the optimization problem convex (QP) at every
 step.
 
 #### Scheduling Variables
@@ -335,10 +335,10 @@ falling back to `scipy` L-BFGS-B otherwise.
 
 ## Files
 
-- `utils.py` — rotation matrices, propulsion mixer, aerodynamic drag, trajectory generators
-- `dynamics.py` — 6-DOF Newton-Euler plant, RK4 integrator, `QuadParams` dataclass
-- `controllers.py` — `PositionController` (feedback linearisation) + `LPVMPCController` (qLPV-MPC)
-- `simulate.py` — end-to-end simulation runner, plotting, CLI entry point
+- `utils.py` - rotation matrices, propulsion mixer, aerodynamic drag, trajectory generators
+- `dynamics.py` - 6-DOF Newton-Euler plant, RK4 integrator, `QuadParams` dataclass
+- `controllers.py` - `PositionController` (feedback linearisation) + `LPVMPCController` (qLPV-MPC)
+- `simulate.py` - end-to-end simulation runner, plotting, CLI entry point
 
 ---
 
@@ -362,7 +362,7 @@ python simulate.py --no-plot        # skip matplotlib output
 pip install numpy scipy matplotlib quadprog
 ```
 
-`quadprog` is optional but recommended — without it the solver falls back to
+`quadprog` is optional but recommended - without it the solver falls back to
 `scipy` L-BFGS-B, which is slower and encodes absolute input constraints as a
 conservative box approximation rather than exact linear constraints.
 
