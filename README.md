@@ -1,53 +1,89 @@
-# quadrotor-feedback-linearization-lpv-mpc
+# Quadrotor Feedback Linearisation + qLPV-MPC
 
-6-DOF quadrotor simulation with a two-level cascade controller: feedback linearisation outer loop for position tracking and qLPV-MPC inner loop for attitude control. Built on full Newton-Euler dynamics, RK4 integration, aerodynamic drag, and gyroscopic rotor coupling. Validated on figure-8, yaw-sweep, and noise robustness scenarios.
+![Python](https://img.shields.io/badge/Python-3.9+-blue)
+![NumPy](https://img.shields.io/badge/NumPy-required-013243)
+![SciPy](https://img.shields.io/badge/SciPy-required-8CAAE6)
+![Tests](https://img.shields.io/badge/tests-4%20passing-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+**A two-level cascade flight controller — exact feedback linearisation (position) + quasi-LPV Model Predictive Control (attitude) — achieving 6.1 mm position RMSE on a full nonlinear 6-DOF Newton–Euler quadrotor plant, with zero rotor saturation and sub-millisecond QP solve times. Pure Python, verified by an automated regression test suite.**
+
+![Figure-8 Nominal](src/figures/quad_results_figure8.png)
 
 ---
 
-## What This Demonstrates
+## Highlights
 
-- **Feedback Linearisation (Outer Loop)**: exact input-output linearisation, pole-placement gains, no small-angle assumption, runs at 5 Hz
-- **qLPV-MPC (Inner Loop)**: scheduling on Euler rates, ZOH discretisation, incremental (Δu) formulation with integral action, DARE terminal weight, runs at 20 Hz
-- **Full Newton-Euler Plant**: 12-state rigid-body model, RK4 integration, gyroscopic rotor coupling (J_tp · Ω_net), quadratic aerodynamic drag
-- **Constrained QP**: absolute torque limits + increment rate limits, solved via `quadprog` (active-set) with `scipy` L-BFGS-B fallback
-- **Trajectory Generator**: 7th-order minimum-jerk polynomial ramp, Lissajous figure-8, yaw-sweep variant
-- **Noise Robustness**: stress-tested at noise_std = 5e-2 (uniform per-state), zero rotor saturations maintained
+- **Exact feedback linearisation** outer loop — geometric thrust-vector inversion with **no small-angle assumption**, valid at any yaw and pitch below 90° (arcsin arguments clipped, angle references limited, and commanded thrust clamped to the physical rotor ceiling)
+- **qLPV-MPC** inner loop — re-linearised every sample on measurable scheduling variables, **exact ZOH discretisation**, incremental (Δu) formulation with built-in integral action
+- **DARE terminal cost** — anchored to the infinite-horizon LQR solution as a formal stability certificate (Rawlings & Mayne, Thm 2.19), with caching that cuts DARE solves from 20 Hz to ~2–5 Hz
+- **Constrained QP** — simultaneous absolute torque limits and increment rate limits, solved via `quadprog` (active-set) with a `scipy` fallback
+- **Full nonlinear plant** — 12-state Newton–Euler dynamics, RK4 integration, quadratic aerodynamic drag, gyroscopic rotor coupling (J_tp·Ω_net)
+- **Regression-tested** — a pytest suite closes the loop on every scenario in ~6 s (see [Testing](#testing))
 
 ---
 
 ## Results
 
-### Nominal Figure-8 (drag on, no noise, 40 s)
+### Test trajectory
+
+All headline numbers are for a Lissajous figure-8 spanning **4 m × 2 m** at constant altitude, period ≈ 25 s (ω = 0.25 rad/s), flown for 40 s with aerodynamic drag enabled. Peak reference velocity ≈ 0.7 m/s, peak acceleration ≈ 0.25 m/s², entered via a 7th-order minimum-jerk lead-in ramp.
+
+### Nominal figure-8 (drag on, no noise, 40 s)
 
 | Metric | Value |
 |--------|-------|
-| Position RMSE | 0.0075 m |
-| Position max error | 0.0307 m |
-| Attitude RMSE | 0.080 deg |
-| Attitude max error | 0.651 deg |
-| Control effort (mean torque norm) | 0.00055 N·m |
-| Rotor saturations | 0 / 801 steps (0.0%) |
+| Position RMSE | **0.0061 m** |
+| Position max error | 0.0154 m |
+| Attitude RMSE | 0.078° |
+| Attitude max error | 0.576° |
+| Mean torque norm | 0.00055 N·m |
+| Rotor saturations | **0 / 801 steps (0.0 %)** |
 
-### Noise Robustness (noise_std = 5e-2, figure-8, 40 s)
+### Yaw-sweep validation (ψ ramped at 0.05 rad/s, reaching ~103° over the run)
 
-| Metric | Nominal | Stress (noise_std=5e-2) |
-|--------|---------|------------------------|
-| Position RMSE | 0.0075 m | 0.0097 m |
-| Position max | 0.0307 m | 0.0323 m |
-| Rotor saturations | 0 (0.0%) | 0 (0.0%) |
+Exercises the yaw channel and the time-varying A(σ) entries that are dormant when ψ_ref ≡ 0.
+
+| Metric | Value |
+|--------|-------|
+| Position RMSE | 0.0061 m (unchanged from nominal) |
+| Attitude RMSE | 0.421° |
+| Attitude max error | 0.715° |
+| Rotor saturations | 0 (0.0 %) |
+
+Position tracking is unaffected by the yaw sweep — the qLPV scheduling correctly absorbs the attitude coupling that a fixed linearisation would miss.
+
+### Noise robustness (uniform per-state process noise σ = 5e-2)
+
+| Metric | Nominal | Stress (σ = 5e-2) |
+|--------|---------|-------------------|
+| Position RMSE | 0.0061 m | 0.0283 m |
+| Position max error | 0.0154 m | 0.0667 m |
+| Rotor saturations | 0 (0.0 %) | 0 (0.0 %) |
+
+Stress-run values vary slightly with the noise realisation (observed range ≈ 0.024–0.028 m RMSE across runs); saturation-free operation holds in every run.
+
+### Computational performance
+
+| Metric | Value |
+|--------|-------|
+| Mean QP solve time | **< 0.3 ms/step** (quadprog active-set; 0.12–0.26 ms observed) |
+| Max QP solve time | < 4 ms (first-solve warmup / DARE recomputation steps) |
+| DARE recomputation rate | ~2–5 Hz (cached; nominal 20 Hz) |
+
+Timings are wall-clock on a consumer laptop and vary run-to-run with OS scheduling; the relevant conclusion — sub-millisecond solves with large margin to embedded rates — is invariant.
+
+### A note on loop rates (sim-to-real)
+
+The 20 Hz attitude / 5 Hz position rates are an architectural choice, **not a solver limit**: at < 0.3 ms per QP solve, the controller has 15–40× margin to a 200 Hz attitude loop even in pure Python, and far more once the condensed QP is ported to a compiled solver such as OSQP. The formulation is rate-independent — the same controller runs at the 250–500 Hz attitude rates used on embedded flight controllers.
 
 ---
 
 ## Visualizations
 
-### Figure-8 (Nominal)
-![Figure-8 Nominal](src/figures/quad_results_figure8.png)
-
-### Noise Robustness
-![Noise Robustness](src/figures/quad_results_noise.png)
-
-### Yaw-Sweep Validation
-![Yaw Sweep](src/figures/quad_results_yaw.png)
+| Nominal figure-8 | Noise robustness | Yaw sweep |
+|---|---|---|
+| ![Figure-8](src/figures/quad_results_figure8.png) | ![Noise](src/figures/quad_results_noise.png) | ![Yaw](src/figures/quad_results_yaw.png) |
 
 ---
 
@@ -64,15 +100,69 @@ reference  ──► │  OUTER LOOP  (5 Hz)                     │
                ┌──────────────────▼──────────────────────┐
                │  INNER LOOP  (20 Hz)                    │
                │  LPVMPCController                        │
-               │  qLPV model · ZOH · Du form · DARE      │
+               │  qLPV model · ZOH · Δu form · DARE      │
                │  Output: U2, U3, U4                      │
                └──────────────────┬──────────────────────┘
                                   │
                ┌──────────────────▼──────────────────────┐
                │  MIXER  (constant, precomputed)          │
-               │  [w1, w2, w3, w4] = M_inv · U           │
+               │  [ω1, ω2, ω3, ω4] = M⁻¹ · U             │
                └─────────────────────────────────────────┘
 ```
+
+---
+
+## Quick Start
+
+```bash
+pip install numpy scipy matplotlib quadprog
+
+python simulate.py                  # figure-8, drag on, no noise
+python simulate.py --hover          # hover at (0, 0, -1.5) m
+python simulate.py --yaw            # figure-8 with yaw sweep
+python simulate.py --no-drag        # disable aerodynamic drag
+python simulate.py --noise 1e-3     # add process noise σ=1e-3
+python simulate.py --duration 60    # run for 60 seconds
+python simulate.py --no-plot        # skip matplotlib output
+```
+
+`quadprog` is optional but recommended — without it the solver falls back to
+`scipy` L-BFGS-B, which is slower and encodes absolute input constraints as a
+conservative box approximation rather than exact linear constraints.
+
+## Testing
+
+```bash
+pip install pytest
+python -m pytest test_tracking.py -v      # 4 tests, ~6 s
+```
+
+The suite runs the real closed-loop simulation (no mocks) across four scenarios — nominal figure-8, yaw sweep, exact hover, and process-noise stress — asserting finite states, RMSE bounds, and zero rotor saturation. It exists because of a bug that a hover check cannot catch (see the postmortem below), and it fails within seconds if that class of bug is ever reintroduced.
+
+## Repository Structure
+
+```
+├── controllers.py     # PositionController (feedback linearisation) + LPVMPCController (qLPV-MPC)   ~920 lines
+├── dynamics.py        # 6-DOF Newton–Euler plant, RK4 integrator, QuadParams                        ~340 lines
+├── simulate.py        # end-to-end simulation runner, metrics, divergence guard, plotting, CLI      ~520 lines
+├── utils.py           # rotations, T-matrix, mixer, aero drag, trajectory generators                ~280 lines
+├── test_tracking.py   # closed-loop regression suite (pytest, ~6 s)
+└── src/figures/       # result plots
+```
+
+~2,000 lines, NumPy/SciPy only — every equation in the deep dive below maps directly to readable code.
+
+---
+
+## Debugging Postmortem: the Gravity-Sign Regression
+
+At one point this repository shipped with the body-frame gravity projection signs flipped in the horizontal channels (`u̇: +g·sinθ` instead of `−g·sinθ`, `v̇` mirrored). The bug was **invisible in hover** — sinθ = sinφ = 0 hides both terms — and every hover check passed. The moment the reference moved, the plant's horizontal response inverted relative to what the controller expected, producing positive-feedback divergence: angle references saturated at their limits, altitude error grew, and the unclamped thrust command U1 = m·‖F_W‖ chased it until float overflow (the simulated vehicle reached ~96 km before producing NaNs).
+
+Diagnosis came from the failure signature, not the code: perfect hover + divergence that begins exactly when the reference moves + the vehicle accelerating *opposite* to the reference in both horizontal axes = a sign inversion between controller model and plant. Three hardening measures came out of it, all in this repo:
+
+1. **Maneuver-based regression tests** (`test_tracking.py`) — hover tests cannot catch equilibrium-hidden sign errors; only a closed-loop tracking test can.
+2. **Thrust clamp** — U1 limited to 90 % of the physical rotor ceiling, so the outer loop can never command thrust the vehicle cannot deliver.
+3. **Divergence guard** — the simulation aborts with a clear message if any state leaves sane bounds, instead of integrating to overflow.
 
 ---
 
@@ -135,7 +225,8 @@ magnitude and direction are:
 
 ```
 F_W   = [vx,  vy,  vz - g]          (desired specific force, NED)
-U1    =  m * norm(F_W)               (total thrust)
+U1    =  m * norm(F_W)               (total thrust, clamped to 90% of
+                                      the physical rotor ceiling)
 T_hat =  F_W / norm(F_W)             (unit thrust direction)
 ```
 
@@ -153,8 +244,11 @@ theta_ref = arcsin(-Tx_psi)
 phi_ref   = arcsin( Ty_psi / cos(theta_ref))
 ```
 
-Valid for any yaw angle and any pitch below 90 degrees.
-No switching logic needed for `cos(psi) = 0` or `sin(psi) = 0`.
+Valid for any yaw angle and any pitch below 90 degrees, with no switching
+logic needed for `cos(psi) = 0` or `sin(psi) = 0`. For numerical safety the
+implementation clips both arcsin arguments to [-1, 1] and limits the
+resulting angle references to configurable `phi_max` / `theta_max` bounds,
+so aggressive transients degrade gracefully instead of producing NaNs.
 
 ---
 
@@ -333,45 +427,27 @@ falling back to `scipy` L-BFGS-B otherwise.
 
 ---
 
-## Files
+## Extensions & Future Work
 
-- `utils.py` - rotation matrices, propulsion mixer, aerodynamic drag, trajectory generators
-- `dynamics.py` - 6-DOF Newton-Euler plant, RK4 integrator, `QuadParams` dataclass
-- `controllers.py` - `PositionController` (feedback linearisation) + `LPVMPCController` (qLPV-MPC)
-- `simulate.py` - end-to-end simulation runner, plotting, CLI entry point
+The qLPV structure makes several practically important extensions natural:
 
----
-
-## Usage
-
-```bash
-python simulate.py                  # figure-8, drag on, no noise
-python simulate.py --hover          # hover at (0, 0, -1.5) m
-python simulate.py --yaw            # figure-8 with yaw sweep
-python simulate.py --no-drag        # disable aerodynamic drag
-python simulate.py --noise 1e-3     # add process noise σ=1e-3
-python simulate.py --duration 60    # run for 60 seconds
-python simulate.py --no-plot        # skip matplotlib output
-```
-
----
-
-## Dependencies
-
-```bash
-pip install numpy scipy matplotlib quadprog
-```
-
-`quadprog` is optional but recommended - without it the solver falls back to
-`scipy` L-BFGS-B, which is slower and encodes absolute input constraints as a
-conservative box approximation rather than exact linear constraints.
+- **Payload-varying flight** — extend the scheduling vector σ with online-estimated mass and inertia, so the MPC model tracks payload release (delivery missions) or continuous mass depletion (spraying missions) without redesign. This is the main practical advantage of qLPV over a fixed-linearisation MPC.
+- **Embedded-rate deployment** — port the condensed QP to OSQP/C; at < 0.3 ms/solve in pure Python, 250–500 Hz attitude rates are already within reach.
+- **Software-in-the-loop validation** — close the loop against PX4 SITL (Gazebo) via offboard control to validate the cascade against a production autopilot stack.
+- **Quaternion attitude parameterisation** — remove the |θ| < 85° Euler restriction for aggressive maneuvering.
 
 ---
 
 ## References
 
 1. Beard & McLain, *Small Unmanned Aircraft*, Princeton UP, 2012
-2. Mahony, Müller, Corke, *Multirotor Aerial Vehicles*, IEEE RA-M, 2012
+2. Mahony, Kumar, Corke, *Multirotor Aerial Vehicles*, IEEE Robotics & Automation Magazine, 2012
 3. Camacho & Bordons, *Model Predictive Control*, Springer, 2004
 4. Rugh & Shamma, *Research on gain scheduling*, Automatica, 2000
 5. Rawlings & Mayne, *Model Predictive Control: Theory and Design*, 2009
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
