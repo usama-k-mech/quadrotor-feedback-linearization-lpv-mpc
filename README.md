@@ -16,7 +16,7 @@
 
 - **Exact feedback linearization** outer loop: geometric thrust-vector inversion with **no small-angle assumption**, valid at any yaw and pitch below 90° (arcsin arguments clipped, angle references limited, and commanded thrust clamped to the physical rotor ceiling)
 - **qLPV-MPC** inner loop: re-linearized every sample on measurable scheduling variables, **exact ZOH discretization**, incremental (Δu) formulation with built-in integral action
-- **DARE terminal cost**: anchored to the infinite-horizon LQR solution as a formal stability certificate (Rawlings & Mayne, Thm 2.19), with caching that cuts DARE solves from 20 Hz to ~2-5 Hz
+- **DARE terminal cost**: terminal weight anchored to the infinite-horizon LQR solution of the frozen-point model (Rawlings & Mayne, Thm 2.19 - a formal stability certificate in the LTI case). Since the qLPV loop re-linearizes every sample, this is a well-motivated heuristic here rather than a formal guarantee; a scheduling-robust terminal set (parameter-dependent Lyapunov/LMI construction) is the known path to a true LPV certificate and is out of scope. DARE caching cuts solves from 20 Hz to ~2-5 Hz.
 - **Constrained QP**: simultaneous absolute torque limits and increment rate limits, solved via `quadprog` (active-set) with a `scipy` fallback
 - **Full nonlinear plant**: 12-state Newton-Euler dynamics, RK4 integration, quadratic aerodynamic drag, gyroscopic rotor coupling (J_tp·Ω_net)
 - **Regression-tested**: a pytest suite closes the loop on every scenario in ~6 s (see [Testing](#testing))
